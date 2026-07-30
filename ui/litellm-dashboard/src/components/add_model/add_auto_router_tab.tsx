@@ -11,6 +11,7 @@ import ComplexityRouterConfig, {
   DEFAULT_TIER_DISTANCE_PENALTY,
 } from "./ComplexityRouterConfig";
 import { KeywordTierRule } from "./KeywordTierRules";
+import { hydrateKeywordTierRules } from "./complexity_router_keywords";
 import { DEFAULT_ESCALATION_KEYWORDS } from "./EscalationKeywords";
 import { DEFAULT_MATCH_THRESHOLD } from "./SemanticKeywordMatching";
 import {
@@ -21,6 +22,7 @@ import {
 import { buildAutoRouterTestTargets, AutoRouterTestTarget } from "./build_auto_router_test_targets";
 import AutoRouterConnectionTest from "./auto_router_connection_test";
 import NotificationManager from "../molecules/notifications_manager";
+import { getAllPresets, getMissingModelsInPreset } from "@/lib/autorouter_presets";
 
 interface AddAutoRouterTabProps {
   handleOk: () => void;
@@ -53,6 +55,8 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ handleOk, accessTok
   const [connectionTestId, setConnectionTestId] = useState<number>(0);
   const [testTargets, setTestTargets] = useState<AutoRouterTestTarget[]>([]);
 
+  const [selectedPreset, setSelectedPreset] = useState<string | undefined>(undefined);
+
   useEffect(() => {
     const fetchModelAccessGroups = async () => {
       const response = await modelAvailableCall(accessToken, "", "", false, null, true, true);
@@ -79,6 +83,50 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ handleOk, accessTok
     value: model_group,
     label: model_group,
   }));
+
+  const availableModelSet = new Set(modelInfo.map((m) => m.model_group));
+  const presets = getAllPresets();
+
+  const handlePresetChange = (presetKey: string | undefined) => {
+    setSelectedPreset(presetKey);
+
+    if (!presetKey || presetKey === "custom") {
+      setComplexityRouterConfig({
+        tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: [] },
+        classifier_type: "heuristic",
+      });
+      setCustomTechnicalKeywords([]);
+      setKeywordTierRules([]);
+      setSemanticMatchingEnabled(false);
+      setEmbeddingModel(undefined);
+      setMatchThreshold(DEFAULT_MATCH_THRESHOLD);
+      setEscalationKeywords(DEFAULT_ESCALATION_KEYWORDS);
+      return;
+    }
+
+    const preset = presets.find((p) => p.label === presetKey);
+    if (!preset) return;
+
+    const config = preset.complexity_router_config;
+    const presetComplexityRouterConfig: ComplexityRouterConfigValue = {
+      tiers: config.tiers,
+      classifier_type: config.classifier_type,
+      classifier_llm_config: config.classifier_llm_config,
+      adaptive: config.adaptive,
+      adaptive_weights: config.adaptive_weights,
+      tier_distance_penalty: config.tier_distance_penalty,
+      adaptive_eligible: config.adaptive_eligible,
+      return_raw_model_name: config.return_raw_model_name,
+    };
+    setComplexityRouterConfig(presetComplexityRouterConfig);
+
+    setCustomTechnicalKeywords(config.custom_technical_keywords || []);
+    setKeywordTierRules(hydrateKeywordTierRules(config.keyword_tier_rules || []));
+    setSemanticMatchingEnabled(config.semantic_keyword_matching || false);
+    setEmbeddingModel(config.embedding_model);
+    setMatchThreshold(config.match_threshold || DEFAULT_MATCH_THRESHOLD);
+    setEscalationKeywords(config.escalation_keywords || DEFAULT_ESCALATION_KEYWORDS);
+  };
 
   const submitRecommendedRouter = (name: string) => {
     const {
@@ -198,6 +246,49 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ handleOk, accessTok
           wrapperCol={{ span: 16 }}
           labelAlign="left"
         >
+          <div className="mb-6">
+            <label className="block text-sm font-medium text-gray-900 mb-2">
+              Template <span className="text-red-500">*</span>
+            </label>
+            <AntdSelect
+              value={selectedPreset}
+              onChange={handlePresetChange}
+              placeholder="Choose a template or select Custom to define your own"
+              className="w-full"
+              optionLabelProp="label"
+              data-testid="template-selector"
+            >
+              <AntdSelect.Option value="custom" label="Custom Configuration">
+                <div>
+                  <div className="font-medium">Custom Configuration</div>
+                  <div className="text-xs text-gray-500">Define your auto router from scratch</div>
+                </div>
+              </AntdSelect.Option>
+              {presets.map((preset) => {
+                const missingModels = getMissingModelsInPreset(preset, availableModelSet);
+                const isDisabled = missingModels.length > 0;
+
+                return (
+                  <AntdSelect.Option
+                    key={preset.label}
+                    value={preset.label}
+                    label={preset.label}
+                    disabled={isDisabled}
+                    title={isDisabled ? `Missing models: ${missingModels.join(", ")}` : preset.description}
+                  >
+                    <div>
+                      <div className="font-medium">{preset.label}</div>
+                      <div className="text-xs text-gray-500">{preset.description}</div>
+                      {isDisabled && (
+                        <div className="text-xs text-red-500 mt-1">Missing: {missingModels.join(", ")}</div>
+                      )}
+                    </div>
+                  </AntdSelect.Option>
+                );
+              })}
+            </AntdSelect>
+          </div>
+
           <Form.Item
             rules={[{ required: true, message: "Auto router name is required" }]}
             label="Auto Router Name"
